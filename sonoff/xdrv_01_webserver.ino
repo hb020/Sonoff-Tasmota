@@ -17,6 +17,9 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+// @@@ HB: REMOVE THIS BEFORE COMMIT!
+#include "sonoff.ino"
+
 #ifdef USE_WEBSERVER
 /*********************************************************************************************\
  * Web server and WiFi Manager
@@ -386,18 +389,18 @@ const char HTTP_DEVICE_CONTROL[] PROGMEM = "<td style='width:%d%%'><button oncli
 const char HTTP_DEVICE_STATE[] PROGMEM = "<td style='width:%d{c}%s;font-size:%dpx'>%s</div></td>";  // {c} = %'><div style='text-align:center;font-weight:
 
 enum ButtonTitle {
-  BUTTON_RESTART, BUTTON_RESET_CONFIGURATION,
+  BUTTON_RESTART, BUTTON_LOCKDOWN, BUTTON_RESET_CONFIGURATION,
   BUTTON_MAIN, BUTTON_CONFIGURATION, BUTTON_INFORMATION, BUTTON_FIRMWARE_UPGRADE, BUTTON_CONSOLE,
   BUTTON_MODULE, BUTTON_WIFI, BUTTON_LOGGING, BUTTON_OTHER, BUTTON_TEMPLATE, BUTTON_BACKUP, BUTTON_RESTORE };
 const char kButtonTitle[] PROGMEM =
-  D_RESTART "|" D_RESET_CONFIGURATION "|"
+  D_RESTART "|" D_LOCKDOWN "|" D_RESET_CONFIGURATION "|"
   D_MAIN_MENU "|" D_CONFIGURATION "|" D_INFORMATION "|" D_FIRMWARE_UPGRADE "|" D_CONSOLE "|"
-  D_CONFIGURE_MODULE "|" D_CONFIGURE_WIFI"|" D_CONFIGURE_LOGGING "|" D_CONFIGURE_OTHER "|" D_CONFIGURE_TEMPLATE "|" D_BACKUP_CONFIGURATION "|" D_RESTORE_CONFIGURATION;
+  D_CONFIGURE_MODULE "|" D_CONFIGURE_WIFI"|" D_CONFIGURE_LOGGING "|" D_CONFIGURE_OTHER "|" D_CONFIGURE_TEMPLATE "|" D_BACKUP_CONFIGURATION "|" D_RESTORE_CONFIGURATION ;
 const char kButtonAction[] PROGMEM =
-  ".|rt|"
+  ".|lk|rt|"
   ".|cn|in|up|cs|"
   "md|wi|lg|co|tp|dl|rs";
-const char kButtonConfirm[] PROGMEM = D_CONFIRM_RESTART "|" D_CONFIRM_RESET_CONFIGURATION;
+const char kButtonConfirm[] PROGMEM = D_CONFIRM_RESTART "|" D_CONFIRM_LOCKDOWN "|" D_CONFIRM_RESET_CONFIGURATION;
 
 enum CTypes { CT_HTML, CT_PLAIN, CT_XML, CT_JSON, CT_STREAM };
 const char kContentTypes[] PROGMEM = "text/html|text/plain|text/xml|application/json|application/octet-stream";
@@ -483,6 +486,7 @@ void StartWebserver(int type, IPAddress ipweb)
       WebServer->on("/rs", HandleRestoreConfiguration);
       WebServer->on("/rt", HandleResetConfiguration);
       WebServer->on("/in", HandleInformation);
+      WebServer->on("/lk", HandleLockDown);
 #ifdef USE_EMULATION
       HueWemoAddHandlers();
 #endif  // USE_EMULATION
@@ -555,10 +559,13 @@ bool WebAuthenticate(void)
 
 bool HttpCheckPriviledgedAccess(bool autorequestauth = true)
 {
+  // if in user mode: only allow Root
   if (HTTP_USER == webserver_state) {
     HandleRoot();
     return false;
   }
+  // if (!autorequestauth) : let the caller handle the rest. Ex.: HandleHttpCommand uses request parameters for verification, and a JSON error reply
+  // else: if I am not authenticated, reply with HTTP 401
   if (autorequestauth && !WebAuthenticate()) {
     WebServer->requestAuthentication();
     return false;
@@ -749,11 +756,13 @@ void WSContentButton(uint8_t title_index)
   char title[32];
 
   if (title_index <= BUTTON_RESET_CONFIGURATION) {
+    // Red buttons with pop-up confirmation
+    // This is for all buttons having an index lower than or equal to BUTTON_RESET_CONFIGURATION
     char confirm[64];
     WSContentSend_P(PSTR("<p><form action='%s' method='get' onsubmit='return confirm(\"%s\");'><button name='%s' class='button bred'>%s</button></form></p>"),
       GetTextIndexed(action, sizeof(action), title_index, kButtonAction),
       GetTextIndexed(confirm, sizeof(confirm), title_index, kButtonConfirm),
-      (!title_index) ? "rst" : "non",
+      (!title_index) ? "rst" : "non", // "rst" is used on the main page to force a reset. "non" is not used. Maybe we could save 2 bytes here
       GetTextIndexed(title, sizeof(title), title_index, kButtonTitle));
   } else {
     WSContentSend_P(PSTR("<p><form action='%s' method='get'><button>%s</button></form></p>"),
@@ -975,6 +984,14 @@ bool HandleRootStatusRefresh(void)
     snprintf_P(svalue, sizeof(svalue), PSTR(D_CMND_RFKEY "%s"), tmp);
     ExecuteWebCommand(svalue, SRC_WEBGUI);
   }
+
+  // @@@ HB: START testing only
+  WebGetArg(D_CMND_WEBSERVER, tmp, sizeof(tmp)); 
+  if (strlen(tmp)) {
+    snprintf_P(svalue, sizeof(svalue), PSTR(D_CMND_WEBSERVER " %s"), tmp);
+    ExecuteWebCommand(svalue, SRC_WEBGUI);
+  }
+  // @@@ HB: END testing only
 
   WSContentBegin(200, CT_HTML);
   WSContentSend_P(PSTR("{t}"));
@@ -1496,6 +1513,7 @@ void HandleOtherConfiguration(void)
 #endif  // USE_EMULATION
 
   WSContentSend_P(HTTP_FORM_END);
+  WSContentSpaceButton(BUTTON_LOCKDOWN);
   WSContentSpaceButton(BUTTON_CONFIGURATION);
   WSContentStop();
 }
@@ -1712,6 +1730,32 @@ void HandleInformation(void)
   WSContentSend_P(PSTR("<style>td{padding:0px 5px;}</style>"
                        "<div id='i' name='i'></div>"));
   //   WSContentSend_P(PSTR("</fieldset>"));
+  WSContentSpaceButton(BUTTON_MAIN);
+  WSContentStop();
+}
+
+
+/*-------------------------------------------------------------------------------------------*/
+
+void HandleLockDown(void)
+{
+  // Lock down the web server, go from ADMIN mode to USER mode.
+  if (!HttpCheckPriviledgedAccess()) { return; }
+
+  AddLog_P(LOG_LEVEL_DEBUG, S_LOG_HTTP, S_LOCKDOWN);
+
+  char command[CMDSZ];
+  snprintf_P(command, sizeof(command), PSTR(D_CMND_WEBSERVER " 1"));
+  ExecuteWebCommand(command, SRC_WEBGUI);
+
+  uint32_t rndNum;
+  randomSeed(analogRead(A0)+micros());
+  rndNum = (uint32_t)random(INT32_MAX);
+  Settings.webserver_unlock_key = rndNum;
+
+  WSContentStart_P(S_LOCKDOWN);
+  WSContentSendStyle();
+  WSContentSend_P(PSTR("Unlock: via http://yourip/blabla?key=%08lX"),(unsigned long)rndNum);
   WSContentSpaceButton(BUTTON_MAIN);
   WSContentStop();
 }

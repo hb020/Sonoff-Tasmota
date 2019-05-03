@@ -252,6 +252,8 @@
 #define D_RESET_CONFIGURATION "Reset Configuration"
 #define D_BACKUP_CONFIGURATION "Backup Configuration"
 #define D_RESTORE_CONFIGURATION "Restore Configuration"
+#define D_LOCKDOWN "Lock Down" // Lock down the web server, go from ADMIN mode to USER mode.
+#define D_CONFIRM_LOCKDOWN "Confirm Lock Down"
 #define D_MAIN_MENU "Main Menu"
 
 #define D_MODULE_PARAMETERS "Module parameters"

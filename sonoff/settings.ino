@@ -907,6 +907,8 @@ void SettingsDefaultSet2(void)
 
   SettingsDefaultWebColor();
 
+//  Settings.webserver_unlock_key = 0;
+
   memset(&Settings.drivers, 0xFF, 32);  // Enable all possible monitors, displays, drivers and sensors
 }
 
@@ -1163,6 +1165,9 @@ void SettingsDelta(void)
     }
     if (Settings.version < 0x06050007) {
       Settings.ledmask = APP_LEDMASK;
+    }
+    if (Settings.version < 0x0605000A) {
+      Settings.webserver_unlock_key = 0;
     }
 
     Settings.version = VERSION;
